@@ -1,0 +1,20 @@
+create extension if not exists pgcrypto;
+create table public.staff_roles(user_id uuid primary key references auth.users(id) on delete cascade, role text not null check(role in ('admin','editor')));
+create table public.service_requests(id uuid primary key default gen_random_uuid(),full_name text not null check(length(full_name) between 2 and 100),phone text not null check(length(phone) between 7 and 25),email text,vehicle text not null check(length(vehicle) between 2 and 120),service text not null check(service in ('Maintenance & Repairs','Wheel Alignment','Bodywork & Painting','Vehicle Detailing','Spare Parts Supply','Vehicle Restoration')),preferred_date date not null,message text check(length(message)<=1500),status text not null default 'new' check(status in ('new','contacted','confirmed','completed','cancelled')),created_at timestamptz not null default now());
+create table public.site_content(id uuid primary key default gen_random_uuid(),section text not null unique check(length(section)<=80),title text not null check(length(title)<=200),body text not null default '' check(length(body)<=5000),published boolean not null default false,updated_at timestamptz not null default now());
+alter table public.staff_roles enable row level security;alter table public.service_requests enable row level security;alter table public.site_content enable row level security;
+revoke all on public.staff_roles,public.service_requests,public.site_content from anon,authenticated;
+grant select on public.site_content to anon,authenticated;
+grant select,update on public.service_requests to authenticated;
+grant select,insert,update,delete on public.site_content to authenticated;
+grant select on public.staff_roles to authenticated;
+create function public.is_staff() returns boolean language sql stable security definer set search_path='' as $$ select exists(select 1 from public.staff_roles where user_id=(select auth.uid()) and role in ('admin','editor')) $$;
+revoke all on function public.is_staff() from public;grant execute on function public.is_staff() to authenticated;
+create policy "public published content" on public.site_content for select to anon,authenticated using(published or (select public.is_staff()));
+create policy "staff create content" on public.site_content for insert to authenticated with check((select public.is_staff()));
+create policy "staff update content" on public.site_content for update to authenticated using((select public.is_staff())) with check((select public.is_staff()));
+create policy "staff delete content" on public.site_content for delete to authenticated using((select public.is_staff()));
+create policy "staff view requests" on public.service_requests for select to authenticated using((select public.is_staff()));
+create policy "staff update requests" on public.service_requests for update to authenticated using((select public.is_staff())) with check((select public.is_staff()));
+create policy "staff view own role" on public.staff_roles for select to authenticated using(user_id=(select auth.uid()));
+-- Public visitors cannot read or insert service requests directly. Only the validated Edge Function inserts them.
